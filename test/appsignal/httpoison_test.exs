@@ -1,3 +1,11 @@
+defmodule Appsignal.HTTPoisonTestClient do
+  use Appsignal.HTTPoison.Base
+
+  def process_request_url("/custom") do
+    "https://api.example.com:8443/custom"
+  end
+end
+
 defmodule Appsignal.HTTPoisonTest do
   use ExUnit.Case
   alias Appsignal.{Span, Test}
@@ -80,6 +88,50 @@ defmodule Appsignal.HTTPoisonTest do
     test "closes the span" do
       assert {:ok, [{%Span{}}]} = Test.Tracer.get(:close_span)
     end
+  end
+
+  describe "request/1 and request!/1, with a root span" do
+    setup do
+      start_supervised!(Test.Nif)
+      start_supervised!(Test.Tracer)
+      start_supervised!(Test.Span)
+      start_supervised!(Test.Monitor)
+
+      Appsignal.Tracer.create_span("http_request")
+      request = %HTTPoison.Request{method: :get, url: "https://example.com/path"}
+
+      {:ok, request: request}
+    end
+
+    test "instruments request/1", %{request: request} do
+      assert Appsignal.HTTPoison.request(request) == {:ok, :fake_response}
+      assert {:ok, [{"http_request", %Span{}}]} = Test.Tracer.get(:create_span)
+      assert {:ok, [{%Span{}}]} = Test.Tracer.get(:close_span)
+    end
+
+    test "instruments request!/1", %{request: request} do
+      assert Appsignal.HTTPoison.request!(request) == :fake_response
+      assert {:ok, [{"http_request", %Span{}}]} = Test.Tracer.get(:create_span)
+      assert {:ok, [{%Span{}}]} = Test.Tracer.get(:close_span)
+    end
+  end
+
+  test "names the span after the processed URL" do
+    start_supervised!(Test.Nif)
+    start_supervised!(Test.Tracer)
+    start_supervised!(Test.Span)
+    start_supervised!(Test.Monitor)
+    Appsignal.Tracer.create_span("http_request")
+
+    Appsignal.HTTPoison.request(:get, "localhost:4000/users")
+    Appsignal.HTTPoisonTestClient.request(:get, "/custom")
+
+    assert {:ok, spans} = Test.Span.get(:set_name)
+
+    assert Enum.map(spans, &elem(&1, 1)) == [
+             "GET https://api.example.com:8443",
+             "GET http://localhost:4000"
+           ]
   end
 
   defp attribute?(asserted_key, asserted_data) do

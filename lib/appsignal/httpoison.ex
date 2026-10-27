@@ -16,14 +16,15 @@ defmodule Appsignal.HTTPoison.Base do
       @tracer Application.compile_env(:appsignal, :appsignal_tracer, Appsignal.Tracer)
       @span Application.compile_env(:appsignal, :appsignal_span, Appsignal.Span)
 
-      def request(method, url, body, headers, options) do
+      def request(request) do
         parent = @tracer.current_span()
 
         span =
           if parent do
-            %URI{scheme: scheme, host: host, port: port} = URI.parse(url)
+            processed_url = request.url |> to_string() |> process_request_url()
+            %URI{scheme: scheme, host: host, port: port} = URI.parse(processed_url)
             sanitized_url = to_string(%URI{scheme: scheme, host: host, port: port})
-            method_string = method |> to_string() |> String.upcase()
+            method_string = request.method |> to_string() |> String.upcase()
 
             "http_request"
             |> @tracer.create_span(parent)
@@ -32,13 +33,13 @@ defmodule Appsignal.HTTPoison.Base do
           end
 
         try do
-          super(method, url, body, headers, options)
+          super(request)
         after
           if span, do: @tracer.close_span(span)
         end
       end
 
-      defoverridable request: 5
+      defoverridable request: 1
     end
   end
 end

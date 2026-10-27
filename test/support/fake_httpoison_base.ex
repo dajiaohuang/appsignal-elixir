@@ -15,7 +15,13 @@ defmodule FakeHTTPoisonBase do
 
   defmacro __using__(_opts) do
     quote do
-      def request(_method, _url, _body \\ "", _headers \\ [], _options \\ []) do
+      def process_request_url(url) do
+        url = to_string(url)
+
+        if String.contains?(url, "://"), do: url, else: "http://" <> url
+      end
+
+      def request(_request) do
         if FakeHTTPoisonBase.should_raise?() do
           raise RuntimeError, "Simulated HTTP error"
         else
@@ -23,7 +29,34 @@ defmodule FakeHTTPoisonBase do
         end
       end
 
-      defoverridable request: 5
+      def request(method, url, body \\ "", headers \\ [], options \\ []) do
+        request(%HTTPoison.Request{
+          method: method,
+          url: url,
+          body: body,
+          headers: headers,
+          options: options
+        })
+      end
+
+      def request!(request) do
+        case request(request) do
+          {:ok, response} -> response
+          {:error, reason} -> raise RuntimeError, "Simulated HTTP error: #{inspect(reason)}"
+        end
+      end
+
+      def request!(method, url, body \\ "", headers \\ [], options \\ []) do
+        request!(%HTTPoison.Request{
+          method: method,
+          url: url,
+          body: body,
+          headers: headers,
+          options: options
+        })
+      end
+
+      defoverridable process_request_url: 1, request: 1, request: 5, request!: 1, request!: 5
     end
   end
 end
