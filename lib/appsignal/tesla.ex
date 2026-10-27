@@ -34,7 +34,10 @@ defmodule Appsignal.Tesla do
         %{env: env},
         _config
       ) do
-    do_tesla_request_start(@tracer.current_span(), env)
+    # Tesla.Adapter.Finch also emits Finch events for this request.
+    span = do_tesla_request_start(@tracer.current_span(), env)
+    @tracer.begin_http_client_event_suppression()
+    span
   end
 
   defp do_tesla_request_start(nil, _env), do: nil
@@ -165,5 +168,6 @@ defmodule Appsignal.Tesla do
 
   def tesla_request_stop(_event, _measurements, _metadata, _config) do
     @tracer.close_span(@tracer.current_span())
+    @tracer.end_http_client_event_suppression()
   end
 end

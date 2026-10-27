@@ -187,6 +187,70 @@ defmodule Appsignal.TeslaTest do
     end
   end
 
+  describe "a Tesla request through the Finch adapter" do
+    setup do
+      start_supervised!(Test.Nif)
+      start_supervised!(Test.Tracer)
+      start_supervised!(Test.Span)
+      start_supervised!(Test.Monitor)
+
+      Appsignal.Tracer.create_span("http_request")
+
+      :telemetry.execute(
+        [:tesla, :request, :start],
+        %{},
+        %{env: env("https://example.com")}
+      )
+
+      :telemetry.execute(
+        [:finch, :request, :start],
+        %{},
+        %{
+          name: FinchTest,
+          request: %{
+            method: "GET",
+            scheme: :https,
+            path: "/",
+            query: nil,
+            host: "example.com",
+            port: 443
+          }
+        }
+      )
+
+      :telemetry.execute([:finch, :request, :stop], %{}, %{name: FinchTest, request: %{}})
+      :telemetry.execute([:tesla, :request, :stop], %{}, %{})
+
+      :telemetry.execute(
+        [:finch, :request, :start],
+        %{},
+        %{
+          name: FinchTest,
+          request: %{
+            method: "GET",
+            scheme: :https,
+            path: "/",
+            query: nil,
+            host: "example.com",
+            port: 443
+          }
+        }
+      )
+
+      :telemetry.execute([:finch, :request, :stop], %{}, %{name: FinchTest, request: %{}})
+    end
+
+    test "records overlapping requests once and restores direct Finch instrumentation" do
+      assert {:ok, [{"http_request", %Span{}}, {"http_request", %Span{}}]} =
+               Test.Tracer.get(:create_span)
+
+      assert attribute?("appsignal:category", "request.tesla")
+      assert attribute?("appsignal:category", "request.finch")
+      assert {:ok, [%Span{}, %Span{}]} = Test.Tracer.get(:close_span)
+      refute Test.Tracer.http_client_events_suppressed?()
+    end
+  end
+
   describe "tesla_request_start/4, with the PathParams middleware" do
     setup do
       start_supervised!(Test.Nif)

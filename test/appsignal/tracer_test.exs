@@ -521,6 +521,24 @@ defmodule Appsignal.TracerTest do
     end
   end
 
+  describe "HTTP client event suppression" do
+    test "is nested" do
+      refute Tracer.http_client_events_suppressed?()
+
+      assert :ok = Tracer.begin_http_client_event_suppression()
+      assert Tracer.http_client_events_suppressed?()
+
+      assert :ok = Tracer.begin_http_client_event_suppression()
+      assert Tracer.http_client_events_suppressed?()
+
+      assert :ok = Tracer.end_http_client_event_suppression()
+      assert Tracer.http_client_events_suppressed?()
+
+      assert :ok = Tracer.end_http_client_event_suppression()
+      refute Tracer.http_client_events_suppressed?()
+    end
+  end
+
   defp create_root_span(_context) do
     [span: Tracer.create_span("http_request")]
   end

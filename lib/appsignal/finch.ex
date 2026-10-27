@@ -34,7 +34,7 @@ defmodule Appsignal.Finch do
         %{name: name, request: request},
         _config
       ) do
-    if !has_prefix(name, "AppsignalFinch") do
+    if !has_prefix(name, "AppsignalFinch") and not @tracer.http_client_events_suppressed?() do
       do_finch_request_start(@tracer.current_span(), name, request)
     end
   end
@@ -67,7 +67,7 @@ defmodule Appsignal.Finch do
   end
 
   def finch_request_stop(_event, _measurements, %{name: name, request: _request}, _config) do
-    if !has_prefix(name, "AppsignalFinch") do
+    if !has_prefix(name, "AppsignalFinch") and not @tracer.http_client_events_suppressed?() do
       if span = @tracer.current_span() do
         @tracer.close_span(span)
       end

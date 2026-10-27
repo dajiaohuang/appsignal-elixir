@@ -4,6 +4,7 @@ defmodule Appsignal.Tracer do
   @monitor Application.compile_env(:appsignal, :appsignal_monitor, Appsignal.Monitor)
 
   @table :"$appsignal_registry"
+  @http_client_event_suppression_key {__MODULE__, :http_client_event_suppression}
 
   @type option :: {:pid, pid} | {:start_time, integer}
   @type options :: [option]
@@ -93,6 +94,33 @@ defmodule Appsignal.Tracer do
     pid
     |> lookup()
     |> current()
+  end
+
+  # Keep the suppression depth process-local so nested Tesla requests can restore it safely.
+  @doc false
+  def begin_http_client_event_suppression do
+    Process.put(
+      @http_client_event_suppression_key,
+      Process.get(@http_client_event_suppression_key, 0) + 1
+    )
+
+    :ok
+  end
+
+  @doc false
+  def end_http_client_event_suppression do
+    case Process.get(@http_client_event_suppression_key, 0) do
+      1 -> Process.delete(@http_client_event_suppression_key)
+      count when count > 1 -> Process.put(@http_client_event_suppression_key, count - 1)
+      _ -> :ok
+    end
+
+    :ok
+  end
+
+  @doc false
+  def http_client_events_suppressed? do
+    Process.get(@http_client_event_suppression_key, 0) > 0
   end
 
   @doc """

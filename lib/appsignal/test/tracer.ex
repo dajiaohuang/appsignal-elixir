@@ -9,6 +9,9 @@ defmodule Appsignal.Test.Tracer do
   defdelegate root_span(), to: Tracer
   defdelegate root_span(pid), to: Tracer
   defdelegate ignore(), to: Tracer
+  defdelegate begin_http_client_event_suppression(), to: Tracer
+  defdelegate end_http_client_event_suppression(), to: Tracer
+  defdelegate http_client_events_suppressed?(), to: Tracer
 
   def create_span(namespace) do
     add(:create_span, {namespace})
