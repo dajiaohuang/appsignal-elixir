@@ -36,6 +36,32 @@ defmodule Appsignal.EctoTest do
     Application.delete_env(:appsignal, Appsignal.Test.Repo, telemetry_prefix: :my_repo)
   end
 
+  test "attaches using the final runtime repo options" do
+    :ok = Ecto.attach()
+
+    :telemetry.execute(
+      [:ecto, :repo, :init],
+      %{system_time: System.system_time()},
+      %{
+        repo: Appsignal.Test.DynamicRepo,
+        opts: [otp_app: :appsignal, telemetry_prefix: [:runtime_repo]]
+      }
+    )
+
+    assert attached?([:runtime_repo, :query])
+
+    :telemetry.execute(
+      [:ecto, :repo, :init],
+      %{system_time: System.system_time()},
+      %{
+        repo: Appsignal.Test.ForeignRepo,
+        opts: [otp_app: :other_app, telemetry_prefix: [:foreign_repo]]
+      }
+    )
+
+    refute attached?([:foreign_repo, :query])
+  end
+
   describe "handle_event/4, without a root span" do
     setup do
       start_supervised!(Test.Nif)

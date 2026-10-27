@@ -28,27 +28,62 @@ defmodule Appsignal.Ecto do
       |> Application.get_env(:config, %{})
       |> Map.get(:otp_app, nil)
 
-    otp_app
-    |> repos()
-    |> Enum.each(&attach(otp_app, &1))
+    attach_repo_init(otp_app)
+    Enum.each(repos(otp_app), &attach_query(otp_app, &1))
   end
 
   @doc """
   Attaches `Appsignal.Ecto` to the Ecto telemetry channel based on the passed
-  `otp_app` and `repo`.
+  `otp_app` and `repo`, and observes repo initialization for runtime options.
   """
   def attach(otp_app, repo) do
-    event = telemetry_prefix(otp_app, repo) ++ [:query]
+    attach_repo_init(otp_app)
+    attach_query(otp_app, repo)
+  end
 
-    case :telemetry.attach({__MODULE__, event}, event, &__MODULE__.handle_event/4, :ok) do
+  @doc false
+  def handle_repo_init(_event, _measurements, %{repo: repo, opts: opts}, otp_app) do
+    if Keyword.fetch!(opts, :otp_app) == otp_app do
+      attach_query_prefix(Keyword.fetch!(opts, :telemetry_prefix))
+    end
+
+    :ok
+  end
+
+  defp attach_repo_init(otp_app) do
+    event = [:ecto, :repo, :init]
+    id = {__MODULE__, event, otp_app}
+
+    case :telemetry.attach(id, event, &__MODULE__.handle_repo_init/4, otp_app) do
       :ok ->
-        Appsignal.IntegrationLogger.debug("Appsignal.Ecto attached to #{inspect(event)}")
+        :ok
 
+      {:error, :already_exists} ->
         :ok
 
       {:error, _} = error ->
         Logger.warning("Appsignal.Ecto not attached to #{inspect(event)}: #{inspect(error)}")
+        error
+    end
+  end
 
+  defp attach_query(otp_app, repo) do
+    attach_query_prefix(telemetry_prefix(otp_app, repo))
+  end
+
+  defp attach_query_prefix(prefix) do
+    event = prefix ++ [:query]
+
+    case :telemetry.attach({__MODULE__, event}, event, &__MODULE__.handle_event/4, :ok) do
+      :ok ->
+        Appsignal.IntegrationLogger.debug("Appsignal.Ecto attached to #{inspect(event)}")
+        :ok
+
+      {:error, :already_exists} ->
+        :ok
+
+      {:error, _} = error ->
+        Logger.warning("Appsignal.Ecto not attached to #{inspect(event)}: #{inspect(error)}")
         error
     end
   end
@@ -67,10 +102,14 @@ defmodule Appsignal.Ecto do
         prefix
 
       _ ->
-        repo
-        |> Module.split()
-        |> Enum.map(&(&1 |> Macro.underscore() |> String.to_atom()))
+        default_telemetry_prefix(repo)
     end
+  end
+
+  defp default_telemetry_prefix(repo) do
+    repo
+    |> Module.split()
+    |> Enum.map(&(&1 |> Macro.underscore() |> String.to_atom()))
   end
 
   @doc false
