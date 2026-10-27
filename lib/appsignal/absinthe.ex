@@ -3,8 +3,19 @@ defmodule Appsignal.Absinthe do
 
   @tracer Application.compile_env(:appsignal, :appsignal_tracer, Appsignal.Tracer)
   @span Application.compile_env(:appsignal, :appsignal_span, Appsignal.Span)
+  @operation_span_stack_key {__MODULE__, :operation_span_stack}
 
-  @moduledoc false
+  @moduledoc """
+  Absinthe telemetry integration.
+
+  Absinthe does not emit an operation-stop event when a resolver raises. To
+  record resolver exceptions and close the GraphQL span, delegate your schema's
+  `middleware/3` callback to `middleware/3` here:
+
+      def middleware(middleware, field, object) do
+        Appsignal.Absinthe.middleware(middleware, field, object)
+      end
+  """
 
   def attach do
     handlers = %{
@@ -44,10 +55,13 @@ defmodule Appsignal.Absinthe do
   def absinthe_execute_operation_start(_event, _measurements, metadata, _config) do
     operation_name = metadata[:options][:operation_name]
 
-    "graphql"
-    |> @tracer.create_span(@tracer.current_span())
-    |> @span.set_name(operation_name || "graphql")
-    |> @span.set_attribute("appsignal:category", "call.graphql")
+    span =
+      "graphql"
+      |> @tracer.create_span(@tracer.current_span())
+      |> @span.set_name(operation_name || "graphql")
+      |> @span.set_attribute("appsignal:category", "call.graphql")
+
+    push_operation_span(span)
 
     root_span = @tracer.root_span()
 
@@ -61,6 +75,69 @@ defmodule Appsignal.Absinthe do
   end
 
   def absinthe_execute_operation_stop(_event, _measurements, _metadata, _config) do
-    @tracer.close_span(@tracer.current_span())
+    @tracer.close_span(pop_operation_span() || @tracer.current_span())
+  end
+
+  @doc "Wraps Absinthe's resolver middleware to record exceptions and close the GraphQL span."
+  def middleware(middleware, _field, _object) do
+    Enum.map(middleware, fn
+      {Absinthe.Resolution, resolver} -> {Absinthe.Resolution, wrap_resolver(resolver)}
+      middleware -> middleware
+    end)
+  end
+
+  @doc false
+  def wrap_resolver(resolver) when is_function(resolver, 2) do
+    fn _source, arguments, resolution ->
+      with_error_tracking(fn -> resolver.(arguments, resolution) end)
+    end
+  end
+
+  def wrap_resolver(resolver) when is_function(resolver, 3) do
+    fn source, arguments, resolution ->
+      with_error_tracking(fn -> resolver.(source, arguments, resolution) end)
+    end
+  end
+
+  def wrap_resolver({module, function}) do
+    fn source, arguments, resolution ->
+      with_error_tracking(fn -> apply(module, function, [source, arguments, resolution]) end)
+    end
+  end
+
+  def wrap_resolver(resolver), do: resolver
+
+  defp with_error_tracking(function) do
+    function.()
+  rescue
+    error ->
+      if span = pop_operation_span() do
+        @span.add_error(span, error, __STACKTRACE__)
+        @tracer.close_span(span)
+      end
+
+      reraise error, __STACKTRACE__
+  end
+
+  defp push_operation_span(span) do
+    Process.put(
+      @operation_span_stack_key,
+      [span | Process.get(@operation_span_stack_key, [])]
+    )
+  end
+
+  defp pop_operation_span do
+    case Process.get(@operation_span_stack_key, []) do
+      [span | remaining] when remaining == [] ->
+        Process.delete(@operation_span_stack_key)
+        span
+
+      [span | remaining] ->
+        Process.put(@operation_span_stack_key, remaining)
+        span
+
+      [] ->
+        nil
+    end
   end
 end

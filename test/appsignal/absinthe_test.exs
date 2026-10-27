@@ -82,6 +82,66 @@ defmodule Appsignal.AbsintheTest do
     end
   end
 
+  describe "schema middleware resolver wrapping" do
+    test "wraps Absinthe's resolver middleware" do
+      resolver = fn _source, _arguments, _resolution -> :ok end
+
+      assert [{Absinthe.Resolution, wrapped_resolver}] =
+               Appsignal.Absinthe.middleware([{Absinthe.Resolution, resolver}], nil, nil)
+
+      assert :ok = wrapped_resolver.(nil, [], %{})
+    end
+
+    test "a re-raised resolver exception closes the operation span only once" do
+      Tracer.create_span("http_request")
+      execute_operation_start(%{options: []})
+      graphql_span = Tracer.current_span()
+
+      inner_resolver =
+        Appsignal.Absinthe.wrap_resolver(fn _source, _arguments, _resolution ->
+          raise "resolver failed"
+        end)
+
+      outer_resolver =
+        Appsignal.Absinthe.wrap_resolver(fn source, arguments, resolution ->
+          inner_resolver.(source, arguments, resolution)
+        end)
+
+      assert_raise RuntimeError, "resolver failed", fn ->
+        outer_resolver.(nil, [], %{})
+      end
+
+      assert {:ok, [{^graphql_span}]} = Test.Tracer.get(:close_span)
+      assert {:ok, [{^graphql_span, %RuntimeError{message: "resolver failed"}, _stacktrace}]} =
+               Test.Span.get(:add_error)
+      assert %Span{} = Tracer.current_span()
+      assert Tracer.current_span() != graphql_span
+    end
+
+    test "records and closes the GraphQL span when a resolver raises" do
+      Tracer.create_span("http_request")
+      execute_operation_start(%{options: []})
+      graphql_span = Tracer.current_span()
+
+      resolver = fn _source, _arguments, _resolution -> raise "resolver failed" end
+
+      [{Absinthe.Resolution, wrapped_resolver}] =
+        Appsignal.Absinthe.middleware([{Absinthe.Resolution, resolver}], nil, nil)
+
+      assert_raise RuntimeError, "resolver failed", fn ->
+        wrapped_resolver.(nil, [], %{})
+      end
+
+      assert {:ok, [{^graphql_span, %RuntimeError{message: "resolver failed"}, stacktrace}]} =
+               Test.Span.get(:add_error)
+
+      assert stacktrace != []
+      assert {:ok, [{^graphql_span}]} = Test.Tracer.get(:close_span)
+      assert %Span{} = Tracer.current_span()
+      assert Tracer.current_span() != graphql_span
+    end
+  end
+
   describe "execute_operation_stop/4" do
     setup do
       fake_appsignal = start_supervised!(FakeAppsignal)
