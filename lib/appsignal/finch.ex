@@ -3,6 +3,7 @@ defmodule Appsignal.Finch do
 
   @tracer Application.compile_env(:appsignal, :appsignal_tracer, Appsignal.Tracer)
   @span Application.compile_env(:appsignal, :appsignal_span, Appsignal.Span)
+  @request_spans_key {__MODULE__, :request_spans}
 
   @moduledoc false
 
@@ -35,7 +36,8 @@ defmodule Appsignal.Finch do
         _config
       ) do
     if !has_prefix(name, "AppsignalFinch") do
-      do_finch_request_start(@tracer.current_span(), name, request)
+      span = do_finch_request_start(@tracer.current_span(), name, request)
+      Process.put(@request_spans_key, [span | Process.get(@request_spans_key, [])])
     end
   end
 
@@ -68,14 +70,28 @@ defmodule Appsignal.Finch do
 
   def finch_request_stop(_event, _measurements, %{name: name, request: _request}, _config) do
     if !has_prefix(name, "AppsignalFinch") do
-      if span = @tracer.current_span() do
-        @tracer.close_span(span)
-      end
+      if span = take_request_span(), do: @tracer.close_span(span)
     end
   end
 
   def finch_request_stop(_event, _measurements, _metadata, _config) do
     nil
+  end
+
+  # Keep the span opened at `start`; other spans may be current by `stop`.
+  defp take_request_span do
+    case Process.get(@request_spans_key, []) do
+      [span | spans] ->
+        if spans == [] do
+          Process.delete(@request_spans_key)
+        else
+          Process.put(@request_spans_key, spans)
+        end
+        span
+
+      [] ->
+        nil
+    end
   end
 
   defp has_prefix(name, prefix) when is_atom(name) do

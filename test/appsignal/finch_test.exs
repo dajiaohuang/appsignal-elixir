@@ -254,6 +254,42 @@ defmodule Appsignal.FinchTest do
     end
   end
 
+  test "closes the span opened by a Finch request, not the current span" do
+    start_supervised!(Test.Nif)
+    start_supervised!(Test.Tracer)
+    start_supervised!(Test.Span)
+    start_supervised!(Test.Monitor)
+
+    Appsignal.Tracer.create_span("http_request")
+
+    :telemetry.execute(
+      [:finch, :request, :start],
+      %{},
+      %{
+        name: FinchTest,
+        request: %{
+          method: "GET",
+          scheme: :https,
+          path: "/",
+          host: "example.com",
+          port: 443
+        }
+      }
+    )
+
+    request_span = Appsignal.Tracer.current_span()
+    intervening_span = Appsignal.Tracer.create_span("intervening", request_span)
+
+    :telemetry.execute(
+      [:finch, :request, :stop],
+      %{},
+      %{name: FinchTest, request: %{}}
+    )
+
+    assert {:ok, [{^request_span}]} = Test.Tracer.get(:close_span)
+    assert Appsignal.Tracer.current_span() == intervening_span
+  end
+
   defp attribute?(asserted_key, asserted_data) do
     {:ok, attributes} = Test.Span.get(:set_attribute)
 
